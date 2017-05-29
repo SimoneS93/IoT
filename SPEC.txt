@@ -1,0 +1,8 @@
+## MESSAGE FORMATS:
+
+    - Hello (`HELLO`) [b]: node announcement to the network. It expects a "Server" response
+    - Bye (`BYE`) [b]: node announcement of complete transmission
+    - Server (`Server:${nodeId}`) [s]: server announcement
+    - Time (`Time:${timestamp}`) [b]: RTC synchronization
+    - Data (`Data: ${json}`) [s]: node data transmission
+    - Ack (`Ack: ${seqNo}`) [s]: data message ack from the server
