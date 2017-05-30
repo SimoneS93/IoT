@@ -1,127 +1,156 @@
+#include "defs.h"
 #include "Scheduler.h"
-#include "Sensor.h"
-#include "JSONFile.h"
+#include "Serializer.h"
+#include "Logger.h"
 #include "Metadata.h"
 #include "Network.h"
 
-void newConnectionCallback( uint32_t nodeId );
+// #define SERVER 1
 
 
-#define P Serial.print
-#define Pln Serial.println
-#define SEC 1000000
+#ifdef SERVER
 
-RTCScheduler scheduler;
-JSONFile datafile;
+
+void onReceive(uint32_t from, String& msg) {
+  PRINT("got message: ");
+  PRINTLN(msg);
+}
+
+painlessMesh mesh;
 
 
 void setup() {
-  uint32_t seqNo;
-  SensorArray sensors;
-  FakeRandomSensor fake;
-  Metadata metadata;
-
-  
   Serial.begin(115200);
-
-  //SPIFFS.begin();
-  //SPIFFS.format();
-  //test_loggr();
-  //test_meta();  
-
-  Pln("\n\n\n");
-
-  network.setup();
-  datafile.open("/data.json");
-  return;
-
-  scheduler.shouldSense();
-  scheduler.shouldTX();
-
-  metadata.open("metadata.bin");
-  seqNo = metadata.incrementSeqNo();
-  metadata.close();
-  
-  sensors.push("fake", fake.read());
-  sensors.push("fake2", fake.read());
-
-  String json = sensors.toJSON(seqNo, 0);
-  Pln("JSON");
-  P(json);
-
-  JSONFile file;
-
-  file.open("/data.json");
-  file.append(json);
-
-  while (file.hasNext()) {
-    P("line: ");
-    Pln(file.next());
-  }
+  PRINTLN("setup");
+  mesh.setDebugMsgTypes( ERROR | MESH_STATUS | MSG_TYPES | REMOTE ); // all types on
+  mesh.init(MESH_SSID, MESH_PASSWD);
+  mesh.onReceive(&onReceive);
 }
 
 void loop() {
+  mesh.update();
+  delay(10);
+}
+
+#else
+
+// prototype for the RECEIVED network event
+void onReceive(uint32_t from, String& msg);
+
+// prototype for a DATA_ACK network event
+void onDataAck();
+
+
+DirLogger logger = DirLogger("/data");
+Network network;
+bool isDone = false;
+
+
+void setup() { Serial.begin(115200); SPIFFS.begin(); return;
+  Metadata metadata("/metadata.bin");
+  RTCScheduler scheduler;
+
+  if (scheduler.shouldSense()) {
+    sense(metadata.incrementSeqNo(), scheduler, logger);
+  }
+
+  if (!scheduler.shouldTX()) {
+    SLEEP;
+  }
+
+  network.setup(&onReceive);
+  network.onDataAck(&onDataAck);
+}
+
+
+void loop() {  
   network.update();
 
+
+  // no matter what, after 2 minutes of activity go sleep
+  ONCE_AFTER(SLEEP_TIMEOUT, 120 * 1000) {
+    PRINTLN("Too much work, I gotta sleep!");
+    SLEEP;
+  }
+
+  // send HELLO message while we don't know the server address
+  if (!network.knowsServer() && !network.isWaiting()) {
+    PRINTLN("sending HELLO");
+    network.hello();
+    delay(100);
+    return;
+  }
+
+  // if we're waiting for the server, just wait
   if (!network.knowsServer()) {
     delay(10);
     return;
   }
 
-  Pln("ok");
-
-  while (datafile.hasNext()) {
-    P("line: ");
-    Pln(datafile.next());
+  // send data to the server, one at a time
+  // protocol is "Stop and Wait" to not overload the medium with much data
+  if (logger.hasNext()) {
+    if (!network.isWaiting()) {
+      PRINT("sending data: "); PRINTLN(logger.next()); LB;
+      network.sendData(logger.next());
+    }
+  }
+  // if there's no more data, alert you're done on the next ack
+  else {
+    isDone = true;
   }
 
-  delay(10000);
-
-  if (datafile.hasNext()) {
-    String data = datafile.next();
-
-    P("send: "); Pln(data);
-    network.sendData(data);
-  }
-  
-  delay(100);
-}
-
-
-
-void newConnectionCallback( uint32_t nodeId ) {
-  P("new connection"); Pln(nodeId);
-  network.hello();
+  delay(10);
 }
 
 
 /**
-void test_meta() {
-  meta.open("/meta.bin");
-  Serial.print("seq_no: "); Serial.println(meta.getSeqNo());
-  Serial.print("server: "); Serial.println(meta.getServer());
-  meta.incrementSeqNo();
-  Serial.print("new seq_no: "); Serial.println(meta.getSeqNo());
-  meta.close();
+ * Read connected sensors
+ * @todo
+ */
+void sense(uint32_t seqNo, Scheduler& scheduler, Logger& logger) {
+  JSONSerializer serializer;
+
+  serializer.append("seqNo", seqNo);
+  serializer.append("ts", scheduler.now());
+  serializer.append("temp", 22.0, 1);
+  serializer.append("hum", 80);
+  logger.append(seqNo, serializer.toString());
+
+  PRINT("sensing serialization: ");
+  PRINTLN(serializer.toString());
+  LB;
 }
 
-void test_loggr() {
-  loggr.open("/logs.bin");
-  loggr.setTemperature(80);
-  loggr.setHumidity(70);
-  loggr.append();
-  loggr.close();
 
-  loggr.open("/logs.bin");
+/**
+ * We just need to pass the params to the network.
+ * It will handle the message
+ */
+void onReceive(uint32_t from, String& msg) {
+  network.onReceive(from, msg);
+}
 
-  byte i = 0;
-  
-  while (loggr.next()) {
-    Serial.print("######### "); Serial.print(i++); Serial.println(" #######");
-    P("temp: "); P(loggr.getTemperature());
-    P("\nhum: "); P(loggr.getHumidity());
-    Pln("");
+/**
+ * When we got an ack for a data packet, remove it from the logger.
+ * It works with pop because is a Stop-and-Wait protocol!
+ */
+void onDataAck() {
+  logger.pop();
+
+  if (isDone) {
+    network.bye();
   }
 }
-*/
 
+/**
+ * Be sure to send the BYE message, wether on ACK or on TIMEOUT
+ */
+void onTimeout() {
+  if (isDone) {
+    network.bye();
+  }
+}
+
+
+#endif

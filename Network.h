@@ -3,6 +3,7 @@
 
 
 #include <painlessMesh.h>
+#include "Pool.h"
 
 
 #ifndef MESH_SSID
@@ -13,12 +14,8 @@
 #endif
 
 
-/**
- * onReceive callback prototype.
- * Since we can't pass a method reference, we're forced to
- * declare a "global" network instance and work on that
- */
-void onReceive(uint32_t from, String& msg);
+typedef void (*NetworkDataAckCallback)();
+typedef void (*NetworkReceiveCallback)(uint32_t from, String& msg);
 
 
 class Network {
@@ -27,14 +24,13 @@ class Network {
         painlessMesh _mesh;
 
         /**
-         *
+         * Start the network
          */
-        void setup() {
-            _sentHello = false;
+        void setup(NetworkReceiveCallback callback) {
             _server = 0;
             _mesh.setDebugMsgTypes( ERROR | MESH_STATUS | MSG_TYPES | REMOTE ); // all types on
             _mesh.init(MESH_SSID, MESH_PASSWD);
-            _mesh.onReceive(&onReceive);
+            _mesh.onReceive(callback);
         }
 
         /**
@@ -45,17 +41,23 @@ class Network {
         }
 
         /**
-         * Segnala alla rete la tua presenza
-         * Questo triggera la risposta dal server
+         * Alert other nodes that you joined the network.
+         * Then wait for the server to tell you its address.
          */
         void hello() {
-            String msg("HELLO");
+            String msg(MSG_HELLO);
 
-            if (!_sentHello) {
-                Serial.println("sendind hello...");
-                _mesh.sendBroadcast(msg);
-                _sentHello = true;
-            }
+            _isWaiting = true;
+            _mesh.sendBroadcast(msg);
+        }
+
+        /**
+         * Alert other nodes that you're done transmitting.
+         */
+        void bye() {
+            String msg(MSG_BYE);
+
+            _mesh.sendBroadcast(msg);
         }
 
         /**
@@ -76,11 +78,10 @@ class Network {
         }
 
         /**
-         * Verifica se tutti i nodi hanno finito di comunicare
+         * Test if all known nodes finished transmitting
          */
         bool isEmpty() {
-            return false;
-            //return _known.size() == 0;
+            return _known.isEmpty();
         }
 
         /**
@@ -93,39 +94,61 @@ class Network {
             _mesh.sendSingle(_server, msg);
         }
 
-    private:
-        bool _sentHello;
-        uint32_t _server;
-
         /**
-         * Aggiungi nodo alla lista dei nodi attivi
+         * Add node to the known list
          */
         void add(uint32_t node) {
-            //_known.add(node);
+            _known.add(node);
         }
 
         /**
-         * Rimuovi nodo dalla lista dei nodi attivi
+         * Remove node from the known list
          */
         void remove(uint32_t node) {
-            //_known.remove(node);
+            _known.remove(node);
         }
+
+        /**
+         * Handle incoming messages
+         */
+        void onReceive(uint32_t from, String& msg) {
+            if (msg.startsWith(MSG_HELLO)) {
+                add(from);
+            }
+            else if (msg.startsWith(MSG_BYE)) {
+                remove(from);
+            }
+            else if (msg.startsWith(MSG_SERVER)) {
+                _isWaiting = false;
+                setServer(msg);
+            }
+            else if (msg.startsWith(MSG_DATA_ACK)) {
+                _isWaiting = false;
+                
+                if (_onDataAck)
+                    _onDataAck();
+            }
+        }
+
+        /**
+         * Test if network is waiting for a response / ack
+         */
+        bool isWaiting() {
+            return _isWaiting;
+        }
+
+        /**
+         * Register callback for the receipt of a DATA_ACK message
+         */
+        void onDataAck(NetworkDataAckCallback callback) {
+            _onDataAck = callback;
+        }
+
+    private:
+        bool _isWaiting;
+        uint32_t _server;
+        StringPool<uint32_t> _known;
+        NetworkDataAckCallback _onDataAck;
 };
-
-// "global" instance
-Network network;
-
-
-/**
- * Parse message and take proper action
- */
-void onReceive(uint32_t from, String &msg) {
-    Serial.print("rcv: "); Serial.println(msg);
-
-    if (msg.startsWith(MSG_SERVER)) {
-        Serial.println("setting server...");
-        network.setServer(msg);
-    }
-}
 
 #endif
