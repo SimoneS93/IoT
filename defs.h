@@ -10,12 +10,13 @@
 #define DEBUG(name, value) PRINT(##name); PRINT(": "); PRINTLN(##value); PRINTLN("######");
 #define LB PRINTLN("######");
 #define ONCE(label) static bool __once__##label = false; if (!__once__##label && (__once__##label = true))
-#define ONCE_AFTER(label, timeout) static unsigned long __after__##label = millis(); if (__after__##label != 1 && (millis() - __after__##label > timeout) && (__after__##label = 1))
+#define ONCE_AFTER(label, timeout) static unsigned long __onceafter__##label = millis(); if (__onceafter__##label != 1 && (millis() - __onceafter__##label > timeout) && (__onceafter__##label = 1))
+#define EVERY(label, interval) static unsigned long __every__##label = millis(); if ((millis() - __every__##label > interval) && (__every__##label = millis()))
 
 #define len(s) (sizeof(s) / sizeof(char))
 #define MSG_HELLO "HELLO"
 #define MSG_BYE "BYE"
-#define MSG_SERVER "SVR:"
+#define MSG_SERVER_ACK "SVR:"
 #define MSG_DATA "D:"
 #define MSG_DATA_ACK "DACK:"
 

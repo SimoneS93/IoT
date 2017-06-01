@@ -89,14 +89,17 @@ class DirLogger : public Logger {
         }
 
         String next() {
-            String contents;
             File file = _dir.openFile("r");
 
             _filename = _dir.fileName();
-            contents = file.readStringUntil('\n');
+            _current = file.readStringUntil('\n');
             file.close();
 
-            return contents;
+            return current();
+        }
+
+        String current() {
+          return _current;
         }
 
         void pop() {
@@ -107,6 +110,7 @@ class DirLogger : public Logger {
         bool _ready = false;
         const char *_dirname;
         String _filename;
+        String _current;
         Dir _dir;
 };
 

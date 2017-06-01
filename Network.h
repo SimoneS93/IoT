@@ -15,6 +15,7 @@
 
 
 typedef void (*NetworkDataAckCallback)();
+typedef void (*NetworkTimeoutCallback)();
 typedef void (*NetworkReceiveCallback)(uint32_t from, String& msg);
 
 
@@ -38,6 +39,10 @@ class Network {
          */
         void update() {
             _mesh.update();
+
+            if (millis() - _time > _timeout) {
+              timedOut();
+            }
         }
 
         /**
@@ -47,7 +52,7 @@ class Network {
         void hello() {
             String msg(MSG_HELLO);
 
-            _isWaiting = true;
+            wait();
             _mesh.sendBroadcast(msg);
         }
 
@@ -63,11 +68,9 @@ class Network {
         /**
          * Set server address from message
          */
-        void setServer(String msg) {
-            char serverStr[32];
-
-            msg.substring(len(MSG_SERVER)).toCharArray(serverStr, 32);
-            _server = atoi(serverStr);
+        void setServer(uint32_t server) {
+            PRINT("set server: "); PRINTLN(server);
+            _server = server;
         }
 
         /**
@@ -92,19 +95,28 @@ class Network {
 
             msg += data;
             _mesh.sendSingle(_server, msg);
+            wait();
         }
 
         /**
          * Add node to the known list
          */
-        void add(uint32_t node) {
-            _known.add(node);
+        void onHello(uint32_t node) {
+            #ifdef SERVER
+              String ack = String(MSG_SERVER_ACK) + String(_mesh.getNodeId());
+              
+              PRINT("send server address to "); PRINTLN(ack);
+              
+              _mesh.sendSingle(node, ack);
+            #else
+              _known.add(node);
+            #endif
         }
 
         /**
          * Remove node from the known list
          */
-        void remove(uint32_t node) {
+        void onBye(uint32_t node) {
             _known.remove(node);
         }
 
@@ -112,15 +124,20 @@ class Network {
          * Handle incoming messages
          */
         void onReceive(uint32_t from, String& msg) {
+            PRINT("received: "); PRINTLN(msg);
+            
             if (msg.startsWith(MSG_HELLO)) {
-                add(from);
+                onHello(from);
             }
             else if (msg.startsWith(MSG_BYE)) {
-                remove(from);
+                onBye(from);
             }
-            else if (msg.startsWith(MSG_SERVER)) {
+            else if (msg.startsWith(MSG_SERVER_ACK)) {
                 _isWaiting = false;
-                setServer(msg);
+                setServer(from);
+            }
+            else if (msg.startsWith(MSG_DATA)) {
+              onData(from, msg);
             }
             else if (msg.startsWith(MSG_DATA_ACK)) {
                 _isWaiting = false;
@@ -130,11 +147,37 @@ class Network {
             }
         }
 
+        void onData(uint32_t from, String& msg) {
+          String ack = String(MSG_DATA_ACK);
+          
+          PRINT("got data: "); PRINTLN(msg);
+
+          _mesh.sendSingle(from, ack);
+        }
+
+        void onTimeout(NetworkTimeoutCallback callback) {
+          _onTimeout = callback;
+        }
+
+        void timedOut() {
+          _isWaiting = false;
+          _time = millis();
+
+          if (_onTimeout) {
+            _onTimeout();
+          }
+        }
+
         /**
          * Test if network is waiting for a response / ack
          */
         bool isWaiting() {
             return _isWaiting;
+        }
+
+        void wait() {
+            _time = millis();
+            _isWaiting = true;
         }
 
         /**
@@ -146,9 +189,12 @@ class Network {
 
     private:
         bool _isWaiting;
+        unsigned long _time;
+        unsigned long _timeout = 10000;
         uint32_t _server;
         StringPool<uint32_t> _known;
         NetworkDataAckCallback _onDataAck;
+        NetworkTimeoutCallback _onTimeout;
 };
 
 #endif
